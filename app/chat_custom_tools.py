@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .http_client import create_async_http_client
+
 
 INSTRUCTION_CARRIER_NAME = "FormEdit"
 MCP_MAPPING_TOOL_NAME = "1C_GetObject"
@@ -118,7 +120,7 @@ async def list_mcp_tools(url: str) -> List[Dict[str, Any]]:
     if not is_private_mcp_url(url):
         raise ValueError("MCP URL is not allowed. Only localhost/private addresses are permitted.")
 
-    async with httpx.AsyncClient(
+    async with create_async_http_client(
         timeout=httpx.Timeout(15, connect=5, read=12, write=5, pool=5)
     ) as client:
         sid, init = await _mcp_post(
@@ -154,7 +156,7 @@ async def call_mcp_tool(url: str, tool_name: str, arguments: Dict[str, Any]) -> 
     if not is_private_mcp_url(url):
         raise ValueError("MCP URL is not allowed. Only localhost/private addresses are permitted.")
 
-    async with httpx.AsyncClient(
+    async with create_async_http_client(
         timeout=httpx.Timeout(60, connect=5, read=55, write=10, pool=5)
     ) as client:
         sid, init = await _mcp_post(

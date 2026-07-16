@@ -99,16 +99,92 @@
 
 ### Предварительные требования
 
-- Docker & Docker Compose
+- Для Docker: Docker & Docker Compose
+- Для нативного запуска: Python 3.10+
 - Аккаунт code.1c.ai с доступом к API
 - Минимум 512MB RAM, 1GB дискового пространства
 
+### Установка пакета
+
+Проект устанавливается как Python-пакет. Зависимости разделены на extras, чтобы каждый режим ставил только то, что ему нужно:
+
+| Команда | Что ставится | Для чего |
+|---|---|---|
+| `pip install ".[http]"` | FastAPI, Uvicorn, tiktoken | Чат, HTTP MCP, OpenAI API |
+| `pip install ".[stdio]"` | MCP Python SDK | Только MCP через stdin/stdout |
+| `pip install ".[all]"` | всё сразу | Оба режима |
+| `pip install -e ".[all,dev]"` | + pytest, build, hatchling | Разработка |
+
+`pip install -r requirements.txt` продолжает работать: файл стал shim и разворачивается в `.[http]` (запускать из корня репозитория).
+
+После установки доступны две команды: `1c-buddy` (HTTP или stdio) и `1c-buddy-mcp` (сразу stdio).
+
+### Минимальный MCP-only wheel
+
+Если нужен **только MCP-сервер** (Codex, IDE), есть отдельный дистрибутив `1c-buddy-mcp` в каталоге [`mcp-package/`](mcp-package/README.md). В нём нет ни чата, ни OpenAI-совместимого API, ни статики, ни `tiktoken` — только MCP и его восемь инструментов.
+
+```powershell
+# stdio
+python -m pip install .\mcp-package
+1c-buddy-mcp --env-file .env
+
+# stdio + HTTP MCP (/mcp и /health)
+python -m pip install ".\mcp-package[http]"
+1c-buddy-mcp http --env-file .env
+```
+
+Оба дистрибутива ставят console script с одним и тем же именем — `1c-buddy-mcp`. Поэтому конфиг Codex, который указывает на `...\Scripts\1c-buddy-mcp.exe`, работает с любым из них: при переезде с полного пакета на минимальный править конфиг не нужно.
+
+> **Ставить рядом с полным пакетом нельзя.** `1c-buddy` и `1c-buddy-mcp` — альтернативы, а не дополнения.
+>
+> Причина в том, что оба дистрибутива кладут в venv одни и те же файлы: модули пространства `app/` (`app/config.py`, `app/mcp/*` и другие) и команду `1c-buddy-mcp`. Для pip это два независимых пакета, и он не знает, что файлы общие. Отсюда два следствия:
+>
+> - **при установке** второй пакет молча перезапишет файлы первого;
+> - **при удалении** `pip uninstall` любого из двух снесёт общие файлы — и второй пакет останется без половины своих модулей, то есть сломается.
+>
+> Именно поэтому удалить «лишний» пакет и на этом успокоиться нельзя: `pip uninstall 1c-buddy-mcp` в таком venv не чинит окружение, а как раз и ломает `1c-buddy`. Единственный безопасный путь — **снести оба и поставить один**:
+>
+> ```powershell
+> pip uninstall -y 1c-buddy 1c-buddy-mcp
+> pip install <нужный пакет>
+> ```
+>
+> **Что делает сам инструмент.** Если оба пакета всё-таки оказались в одном venv, команда `1c-buddy-mcp` при запуске это обнаружит, откажется работать (код возврата 2) и напечатает те же две строки восстановления. Команда `1c-buddy` при этом продолжит работать, если версии обоих пакетов совпадают (тогда общие файлы одинаковы), и откажется, если версии разные.
+>
+> Но это **диагностика, а не защита**. Она не может отменить уже выполненный `pip uninstall` — файлы к тому моменту уже удалены. И она не сработает, если установленный у вас `1c-buddy` собран из версии репозитория, где этой проверки ещё не было: старый код о ней просто не знает.
+
+Сборка wheel вручную (флаг `--wheel` обязателен — исходники `app/` подтягиваются из родительского каталога, поэтому sdist не поддерживается):
+
+```powershell
+python -m build mcp-package --wheel --outdir dist
+```
+
+> **Windows vs Linux/macOS.** Исполняемые файлы виртуального окружения лежат в разных каталогах:
+>
+> | | Python | Команда |
+> |---|---|---|
+> | Windows | `.venv\Scripts\python.exe` | `.venv\Scripts\1c-buddy.exe` |
+> | Linux / macOS | `.venv/bin/python` | `.venv/bin/1c-buddy` |
+>
+> Ниже все команды приведены для обеих ОС. Если активировать окружение (`.\.venv\Scripts\Activate.ps1` или `source .venv/bin/activate`), можно писать просто `1c-buddy` без пути.
+
 ### Локальная разработка
 
-1. **Установите зависимости:**
-    ```bash
-    pip install -r requirements.txt
+1. **Установите зависимости.**
+
+    Windows (PowerShell):
+    ```powershell
+    py -m venv .venv
+    & .\.venv\Scripts\python.exe -m pip install -e ".[all,dev]"
     ```
+
+    Linux / macOS:
+    ```bash
+    python3 -m venv .venv
+    ./.venv/bin/python -m pip install -e ".[all,dev]"
+    ```
+
+    Ставьте пакет **тем же** Python, что лежит в `.venv`. Если выполнить просто `pip install ".[all]"` системным интерпретатором, команды `1c-buddy` окажутся не в `.venv`, и запуск по пути из venv не сработает.
 
 2. **Настройте переменные окружения:**
     ```bash
@@ -116,10 +192,46 @@
     # Отредактируйте .env с вашими токенами
     ```
 
-3. **Запустите приложение:**
-    ```bash
-    python -m app
+3. **Запустите приложение.**
+
+    Windows (PowerShell):
+    ```powershell
+    & .\.venv\Scripts\1c-buddy.exe --env-file .env http
+    # или, без установки пакета:
+    & .\.venv\Scripts\python.exe -m app --env-file .env http
     ```
+
+    Linux / macOS:
+    ```bash
+    ./.venv/bin/1c-buddy --env-file .env http
+    # или, без установки пакета:
+    ./.venv/bin/python -m app --env-file .env http
+    ```
+
+    > **Важно:** приложение **не читает `.env` автоматически** — ни из текущего каталога, ни откуда-либо ещё. Файл подключается только явным флагом `--env-file PATH`. Альтернатива — экспортировать переменные в окружение процесса. Значения уже существующего окружения имеют приоритет над значениями из `--env-file`.
+    >
+    > Итоговый приоритет: аргументы CLI → окружение процесса → `--env-file` → значения по умолчанию.
+
+
+### Запуск MCP через stdio (Codex, IDE)
+
+Windows (PowerShell):
+```powershell
+py -m venv .venv
+& .\.venv\Scripts\python.exe -m pip install ".[stdio]"
+[Environment]::SetEnvironmentVariable("ONEC_AI_TOKEN", "<your_1c_ai_token>", "User")
+& .\.venv\Scripts\1c-buddy-mcp.exe
+```
+
+Linux / macOS:
+```bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install ".[stdio]"
+export ONEC_AI_TOKEN=<your_1c_ai_token>
+./.venv/bin/1c-buddy-mcp
+```
+
+Режим не открывает HTTP-порт и не поднимает чат: он общается по stdin/stdout и предоставляет те же восемь инструментов, что и HTTP `/mcp`, с теми же схемами. Запущенный вручную он будет молча ждать MCP-фреймы на stdin — это нормально, обычно его запускает сам Codex/IDE. Готовые сниппеты конфигурации Codex — в [README.md](README.md#mcp-через-stdio-для-codex--ide).
 
 ### Развертывание в Docker
 
@@ -176,6 +288,9 @@ SESSION_TTL=3600
 ONEC_AI_INPUT_MAX_LENGTH=100000
 MAX_ATTACHED_FILES_SIZE_KB=100
 MCP_TOOL_INPUT_MAX_LENGTH=100000
+
+# Проверка TLS исходящих запросов (см. раздел «Прокси и TLS»)
+SSL_VERIFY=true
 
 # Контекст проекта для MCP-инструментов (опционально)
 DEFAULT_SSL_VERSION=
@@ -243,6 +358,89 @@ CHAT_CUSTOM_MCP_MAX_TOOLS_PER_SERVER=100
 | `CHAT_CUSTOM_INSTRUCTIONS_MAX_LENGTH` | Максимальная длина пользовательских инструкций | `4000` |
 | `CHAT_CUSTOM_MCP_MAX_SERVERS` | Максимальное количество внешних MCP серверов | `10` |
 | `CHAT_CUSTOM_MCP_MAX_TOOLS_PER_SERVER` | Максимальное количество tools на один внешний MCP сервер | `100` |
+
+#### Прокси и TLS
+
+Настройки применяются ко **всем** исходящим HTTPS-соединениям приложения: чат, OpenAI-совместимый API, MCP-upstream к `code.1c.ai` и подключаемые внешние HTTP MCP-серверы.
+
+| Переменная | Описание | Значение по умолчанию |
+|------------|----------|----------------------|
+| `SSL_VERIFY` | Проверять TLS-сертификаты исходящих HTTPS-запросов | `true` |
+| `HTTP_PROXY` | Прокси для HTTP | — |
+| `HTTPS_PROXY` | Прокси для HTTPS | — |
+| `ALL_PROXY` | Прокси для всех схем | — |
+| `NO_PROXY` | Список адресов в обход прокси | — |
+| `SSL_CERT_FILE` | Путь к доверенному CA bundle (PEM) | — |
+| `SSL_CERT_DIR` | Каталог с доверенными CA (альтернатива `SSL_CERT_FILE`) | — |
+
+В `Settings` приложения входит только `SSL_VERIFY`. Остальные переменные — стандартные инфраструктурные, их напрямую обрабатывает `httpx`; приложение не парсит и не переопределяет их.
+
+**Сценарий 1. Обычная работа.** Ничего настраивать не нужно, проверка сертификатов включена:
+
+```dotenv
+SSL_VERIFY=true
+```
+
+**Сценарий 2. Прозрачный прокси, расшифровывающий HTTPS.** Прокси подменяет цепочку сертификатов на корпоративную — достаточно указать доверенный CA bundle:
+
+```dotenv
+SSL_VERIFY=true
+SSL_CERT_FILE=/certs/company-ca-bundle.pem
+```
+
+**Сценарий 3. Явный прокси.**
+
+```dotenv
+SSL_VERIFY=true
+SSL_CERT_FILE=/certs/company-ca-bundle.pem
+
+HTTP_PROXY=http://proxy.company.local:3128
+HTTPS_PROXY=http://proxy.company.local:3128
+NO_PROXY=localhost,127.0.0.1,host.docker.internal
+```
+
+**Сценарий 4. Аварийный режим без проверки сертификатов.**
+
+```dotenv
+SSL_VERIFY=false
+
+HTTP_PROXY=http://proxy.company.local:3128
+HTTPS_PROXY=http://proxy.company.local:3128
+NO_PROXY=localhost,127.0.0.1
+```
+
+> ⚠️ `SSL_VERIFY=false` отключает проверку подлинности сервера. При перехвате трафика могут быть раскрыты `ONEC_AI_TOKEN`, переписка и вложенные файлы. Используйте только как временную меру, пока не получен корректный CA bundle.
+
+Важные детали:
+
+- При `SSL_VERIFY=false` значение `SSL_CERT_FILE` **не используется**.
+- `SSL_CERT_FILE` должен указывать на **полный** PEM-бандл. Если он задан, публичные корневые сертификаты берутся только из него, поэтому в файле должны быть и публичные CA, и корпоративный — иначе перестанут работать остальные HTTPS-соединения.
+- Просто положить файл сертификата в контейнер **недостаточно**: путь обязан быть передан через `SSL_CERT_FILE`.
+- `NO_PROXY` должен включать адреса локальных MCP-серверов, если они не должны идти через корпоративный прокси.
+- При запуске приложение пишет в лог только **факт** наличия прокси или CA bundle. Сами URL прокси, учётные данные и пути к сертификатам не логируются. При `SSL_VERIFY=false` выводится предупреждение уровня `WARNING`.
+
+Передача сертификата в контейнер (образ не меняется):
+
+```bash
+docker run \
+  -v "$PWD/certs/company-ca-bundle.pem:/certs/company-ca-bundle.pem:ro" \
+  -e "SSL_CERT_FILE=/certs/company-ca-bundle.pem" \
+  -e "SSL_VERIFY=true" \
+  -e "ONEC_AI_TOKEN=<token>" \
+  -p 6002:6002 \
+  roctup/1c-buddy
+```
+
+Основной `docker-compose.yml` намеренно не содержит volume с сертификатом — у большинства пользователей корпоративного CA нет. Для корпоративной установки используйте `docker-compose.override.yml`:
+
+```yaml
+services:
+  1c-buddy:
+    volumes:
+      - ./certs/company-ca-bundle.pem:/certs/company-ca-bundle.pem:ro
+```
+
+Сами переменные (`SSL_CERT_FILE`, `SSL_VERIFY`, `HTTPS_PROXY`, `NO_PROXY`) кладутся в `.env`, который уже подключён через `env_file`.
 
 #### Логирование и отладка
 
@@ -409,7 +607,20 @@ response = client.chat.completions.create(
 
 ### Интеграция инструментов MCP
 
-Сервис реализует MCP (Model Context Protocol) для интеграции с ИИ-помощниками и инструментами. Доступен по эндпоинту `/mcp`.
+Сервис реализует MCP (Model Context Protocol) для интеграции с ИИ-помощниками и инструментами.
+
+#### Два транспорта, один набор инструментов
+
+| Транспорт | Как запускается | Что даёт |
+|---|---|---|
+| **HTTP** | Docker или `1c-buddy http` | `POST /mcp` (Streamable HTTP, JSON-RPC), плюс чат и опциональный `/v1` |
+| **stdio** | `1c-buddy-mcp` или `1c-buddy stdio` | Только MCP через stdin/stdout. Порт не открывается |
+
+Имена инструментов, описания и JSON-схемы у обоих транспортов **идентичны** — они строятся из одного каталога. Различается только оформление результата: HTTP добавляет в текст строки `Сессия:` и `Разговор:`, stdio возвращает чистый результат инструмента, а ошибки помечает флагом `isError`.
+
+#### Валидация аргументов
+
+Аргументы проверяются по объявленной JSON-схеме на обоих транспортах: обязательные поля, типы, `enum`, `minLength` / `maxLength`. Границы длины задаются через `MCP_TOOL_INPUT_MIN_LENGTH` (по умолчанию 4) и `MCP_TOOL_INPUT_MAX_LENGTH`. Незнакомые аргументы игнорируются.
 
 #### Доступные инструменты
 

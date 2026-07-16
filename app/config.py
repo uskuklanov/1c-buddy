@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     # Global input length limit for upstream server (applies to all services: chat, OpenAI API, MCP)
     ONEC_AI_INPUT_MAX_LENGTH: int = Field(100000, alias="ONEC_AI_INPUT_MAX_LENGTH")
 
+    # Outgoing HTTP / TLS
+    SSL_VERIFY: bool = Field(
+        True,
+        alias="SSL_VERIFY",
+        description="Verify TLS certificates for outgoing HTTPS requests",
+    )
+
     # Logging
     LOG_REQUEST_BODY_MAX_LENGTH: int = Field(40000, alias="LOG_REQUEST_BODY_MAX_LENGTH")
 

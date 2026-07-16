@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.24,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "1c-buddy-mcp"
+dynamic = ["version"]
+description = "MCP server for code.1c.ai: stdio by default, HTTP MCP via the [http] extra"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "ROCTUP" }]
+keywords = ["1c", "mcp", "bsl", "stdio"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Code Generators",
+]
+
+# stdio is the base mode, so the MCP SDK is a hard dependency here — unlike the
+# full 1c-buddy distribution, where it sits behind the [stdio] extra.
+dependencies = [
+    "httpx>=0.27,<1",
+    "pydantic>=2.6,<3",
+    "pydantic-settings>=2.2,<3",
+    "python-dotenv>=1,<2",
+    "typing-extensions>=4.12",
+    "mcp>=1.28,<2",
+]
+
+[project.optional-dependencies]
+# No tiktoken: it is only used by the chat token counter, which this wheel does
+# not ship.
+http = [
+    "fastapi>=0.114,<1",
+    "uvicorn[standard]>=0.30,<1",
+]
+
+[project.urls]
+Repository = "https://github.com/ROCTUP/1c-buddy"
+
+[project.scripts]
+1c-buddy-mcp = "onec_buddy_mcp.cli:main"
+
+# Single source of truth for both distributions.
+[tool.hatch.version]
+path = "../app/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/onec_buddy_mcp"]
+
+# The canonical packaging manifest. Sources are not duplicated in the repository:
+# they are pulled from ../app at build time.
+#
+# Every file is listed explicitly rather than including app/mcp wholesale, so a
+# new module cannot land in this wheel unnoticed. The list is not duplicated in
+# the tests either — tests/test_mcp_package_closure.py verifies it against the
+# real import closure in both directions.
+#
+# Deliberately absent: app/cli.py (knows about tiktoken and app.main:app, both
+# unusable here) and app/__main__.py (its `python -m app` path defaults to the
+# HTTP mode, i.e. to the app.main this wheel does not ship).
+#
+# Consequence of the ../app paths: an sdist cannot work, because a wheel built
+# from an unpacked sdist has no ../app. Always build with --wheel.
+[tool.hatch.build.targets.wheel.force-include]
+"../app/__init__.py" = "app/__init__.py"
+"../app/cli_support.py" = "app/cli_support.py"
+"../app/config.py" = "app/config.py"
+"../app/http_client.py" = "app/http_client.py"
+"../app/onec_models.py" = "app/onec_models.py"
+"../app/streaming.py" = "app/streaming.py"
+"../app/text_utils.py" = "app/text_utils.py"
+"../app/mcp/__init__.py" = "app/mcp/__init__.py"
+"../app/mcp/constants.py" = "app/mcp/constants.py"
+"../app/mcp/exceptions.py" = "app/mcp/exceptions.py"
+"../app/mcp/validation.py" = "app/mcp/validation.py"
+"../app/mcp/tool_catalog.py" = "app/mcp/tool_catalog.py"
+"../app/mcp/service.py" = "app/mcp/service.py"
+"../app/mcp/upstream_tools_client.py" = "app/mcp/upstream_tools_client.py"
+"../app/mcp/stdio_server.py" = "app/mcp/stdio_server.py"
+"../app/mcp/models.py" = "app/mcp/models.py"
+"../app/mcp/session.py" = "app/mcp/session.py"
+"../app/mcp/handlers.py" = "app/mcp/handlers.py"
+"../app/mcp/http_transport.py" = "app/mcp/http_transport.py"

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .. import __version__
 from ..onec_client import OneCApiClient
 from ..streaming import sanitize_text
 from ..onec_models import ApiError, ConversationSession
@@ -59,6 +60,7 @@ async def chat_config():
     """
     settings = get_settings()
     return {
+        "app_version": __version__,
         "max_attached_files_size_kb": settings.MAX_ATTACHED_FILES_SIZE_KB,
         "custom_instructions_enabled": settings.CHAT_CUSTOM_INSTRUCTIONS_ENABLED,
         "custom_mcp_enabled": settings.CHAT_CUSTOM_MCP_ENABLED,

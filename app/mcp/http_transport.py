@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
+from .. import __version__
+from .constants import MCP_SERVER_NAME
 from .models import (
     JsonRpcRequest,
     JsonRpcResponse,
@@ -43,6 +45,22 @@ def _get_mcp_upstream_client(request: Request) -> McpUpstreamToolsClient:
         client = McpUpstreamToolsClient()
         request.app.state.mcp_upstream_client = client
     return client
+
+
+async def shutdown_mcp_state(app) -> None:
+    """Release what this router lazily put on app.state.
+
+    The router owns the creation of these objects, so it owns their disposal
+    too. Both app shells — app.main and the minimal one in the MCP-only wheel —
+    call this instead of each carrying its own copy of the state keys.
+    """
+    client: Optional[McpUpstreamToolsClient] = getattr(app.state, "mcp_upstream_client", None)
+    if client is not None:
+        try:
+            await client.close()
+            logger.info("MCP upstream client closed successfully")
+        except Exception as e:
+            logger.error(f"Error closing MCP upstream client: {e}")
 
 
 def _jsonrpc_error(id_value: Any, code: int, message: str, data: Any = None, http_status: int = 200) -> JSONResponse:
@@ -211,7 +229,7 @@ async def mcp_get(request: Request):
 
     # Return endpoint info
     return JSONResponse(status_code=200, content={
-        "name": "code.1c.ai Gateway MCP",
-        "version": "1.0.0",
+        "name": MCP_SERVER_NAME,
+        "version": __version__,
         "endpoint": "/mcp"
     })

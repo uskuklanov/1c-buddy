@@ -12,10 +12,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 
+from . import __version__
 from .routes_openai import router as openai_router
-from .mcp.http_transport import router as mcp_router
+from .mcp.http_transport import router as mcp_router, shutdown_mcp_state
 from .chat.router import router as chat_router
 from .config import get_settings
+from .http_client import env_proxy_configured
 
 # Configure logging
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -33,12 +35,22 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # on startup
-    logger.info("Starting service Gateway for code.1c.ai")
+    logger.info("Starting 1C Buddy v%s - Gateway for code.1c.ai", __version__)
 
     # Debug logging for OpenAI API status
     settings = get_settings()
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(f"OpenAI-compatible API: {'enabled' if settings.OPENAI_COMPAT_API_KEY else 'disabled (OPENAI_COMPAT_API_KEY not set)'}")
+
+    # Outgoing TLS/proxy policy. Never log proxy URLs, credentials or CA paths.
+    if settings.SSL_VERIFY:
+        if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+            logger.info("Custom CA bundle configured for outgoing HTTPS requests")
+    else:
+        logger.warning("TLS certificate verification is disabled for outgoing HTTPS requests")
+
+    if env_proxy_configured():
+        logger.info("Outgoing proxy configured (environment or system settings)")
 
     # app.state.onec_client is created lazily in routes
     yield
@@ -52,17 +64,11 @@ async def lifespan(app: FastAPI):
             logger.info("HTTP client closed successfully")
         except Exception as e:
             logger.error(f"Error closing HTTP client: {e}")
-    mcp_client = getattr(app.state, "mcp_upstream_client", None)
-    if mcp_client:
-        try:
-            await mcp_client.close()
-            logger.info("MCP upstream client closed successfully")
-        except Exception as e:
-            logger.error(f"Error closing MCP upstream client: {e}")
+    await shutdown_mcp_state(app)
 
 app = FastAPI(
     title="Service Gateway for code.1c.ai",
-    version="0.1.0",
+    version=__version__,
     description="Exposes endpoints backed by code.1c.ai",
     lifespan=lifespan,
 )
@@ -204,7 +210,7 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
 
 def main():
     """Entry point for the application"""

@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "1c-buddy"
+dynamic = ["version"]
+description = "Gateway to code.1c.ai: web chat, OpenAI-compatible API and MCP over HTTP or stdio"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "ROCTUP" }]
+keywords = ["1c", "mcp", "openai", "gateway", "bsl"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Code Generators",
+]
+
+# Shared by both transports.
+dependencies = [
+    "httpx>=0.27,<1",
+    "pydantic>=2.6,<3",
+    "pydantic-settings>=2.2,<3",
+    "python-dotenv>=1,<2",
+    "typing-extensions>=4.12",
+]
+
+[project.optional-dependencies]
+http = [
+    "fastapi>=0.114,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "tiktoken>=0.5,<1",
+]
+stdio = [
+    "mcp>=1.28,<2",
+]
+all = [
+    "fastapi>=0.114,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "tiktoken>=0.5,<1",
+    "mcp>=1.28,<2",
+]
+dev = [
+    "pytest>=8,<10",
+    "pytest-asyncio>=0.23,<2",
+    "build>=1,<2",
+    # Backend of mcp-package/. tests/test_mcp_package_wheel.py builds that wheel
+    # with --no-isolation, which takes the backend from this environment.
+    "hatchling>=1.24,<2",
+]
+
+[project.urls]
+Repository = "https://github.com/ROCTUP/1c-buddy"
+
+[project.scripts]
+1c-buddy = "app.cli:main"
+1c-buddy-mcp = "app.cli:stdio_main"
+
+[tool.setuptools.dynamic]
+version = { attr = "app.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["chat/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# mcp-package is a separate distribution; its sources are importable in tests
+# without installing it, which would collide with this package over app/.
+pythonpath = ["mcp-package/src"]

@@ -9,10 +9,20 @@
   const exportBtn = document.getElementById("export-btn");
   const searchContainer = document.getElementById("search-container");
   const searchInput = document.getElementById("search-input");
+  const searchRoleFilter = document.getElementById("search-role-filter");
+  const searchRoleDropdown = document.getElementById("search-role-dropdown");
+  const searchRoleFilterToggle = document.getElementById("search-role-filter-toggle");
+  const searchRoleFilterLabel = document.getElementById("search-role-filter-label");
+  const searchRoleFilterMenu = document.getElementById("search-role-filter-menu");
+  const searchRoleFilterOptions = Array.from(document.querySelectorAll(".search-role-filter-option"));
   const searchResults = document.getElementById("search-results");
+  const searchPrevBtn = document.getElementById("search-prev-btn");
+  const searchNextBtn = document.getElementById("search-next-btn");
   const closeSearchBtn = document.getElementById("close-search-btn");
   const statusEl = document.getElementById("status");
   const sessionIdEl = document.getElementById("session-id");
+  const appInfoEl = document.getElementById("app-info");
+  const appVersionEl = document.getElementById("app-version");
 
   // Sidebar elements
   const sidebar = document.getElementById("sidebar");
@@ -63,6 +73,10 @@
   let currentEventSource = null;
   let currentSettingsTab = "instructions";
   let settingsFeedbackTimer = null;
+  let chatSearchMatches = [];
+  let currentChatSearchIndex = -1;
+  let chatSearchRefreshTimer = null;
+  const messageOriginalHTML = new Map();
 
   const HISTORY_LIMIT = 500;
   const CHAT_SETTINGS_KEY = "onec_chat_custom_settings";
@@ -189,7 +203,17 @@
     try {
       const response = await fetch("/chat/api/config");
       if (response.ok) {
-        chatCapabilities = { ...chatCapabilities, ...(await response.json()) };
+        const config = await response.json();
+        chatCapabilities = { ...chatCapabilities, ...config };
+
+        const appVersion = String(config.app_version || "").trim();
+        if (appVersionEl && appVersion) {
+          appVersionEl.textContent = `v${appVersion}`;
+          appVersionEl.title = `Версия приложения ${appVersion}`;
+          if (appInfoEl) {
+            appInfoEl.hidden = false;
+          }
+        }
       }
     } catch (error) {
       console.warn("Failed to load chat capabilities:", error);
@@ -973,10 +997,14 @@
 
   function renderHistory() {
     const arr = loadHistory();
+    messageOriginalHTML.clear();
     chatEl.innerHTML = "";
     currentAssistantBubble = null;
     for (const m of arr) {
       appendMessage(m.role, m.text, false, m.ts, m.tokens, m.files, m.message_id, m.reasoning, m.tool_calls);
+    }
+    if (searchContainer.classList.contains("visible")) {
+      performChatSearch({ scrollToCurrent: false });
     }
   }
 
@@ -1424,7 +1452,11 @@
       meta.textContent = formatTs(ts || Date.now());
     }
 
-    chatEl.scrollTop = chatEl.scrollHeight;
+    if (searchContainer.classList.contains("visible")) {
+      scheduleChatSearchRefresh();
+    } else {
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
   }
 
   // ================== Tool Calls UI ==================
@@ -1678,7 +1710,12 @@
     if (confirm("Очистить историю текущей беседы?")) {
       chatEl.innerHTML = "";
       currentAssistantBubble = null;
+      messageOriginalHTML.clear();
       conversationsManager.saveHistory(activeConv.id, []);
+
+      if (searchContainer.classList.contains("visible")) {
+        performChatSearch({ scrollToCurrent: false });
+      }
 
       // Reset API conversation_id
       activeConv.conversation_id = null;
@@ -1790,17 +1827,11 @@
 
   // Search button handler
   searchBtn.addEventListener("click", () => {
-    searchContainer.classList.toggle("visible");
     if (searchContainer.classList.contains("visible")) {
-      searchInput.focus();
-    } else {
-      searchInput.value = "";
-      searchResults.textContent = "";
-      // Remove all highlights
-      document.querySelectorAll(".msg .bubble .highlight").forEach(el => {
-        el.outerHTML = el.textContent;
-      });
+      closeChatSearch();
+      return;
     }
+    openChatSearch();
   });
 
   // Settings handlers
@@ -1943,15 +1974,12 @@
     renderMcpMapping(settings);
   });
 
-  // Store original HTML to restore later
-  const messageOriginalHTML = new Map();
-
   // Helper function to save original HTML
   function saveOriginalHTML() {
     const messages = chatEl.querySelectorAll(".msg");
     messages.forEach(msg => {
       const content = msg.querySelector(".bubble .content");
-      if (content && !messageOriginalHTML.has(content)) {
+      if (content && !content.querySelector(".highlight")) {
         messageOriginalHTML.set(content, content.innerHTML);
       }
     });
@@ -1962,16 +1990,149 @@
     messageOriginalHTML.forEach((originalHTML, contentEl) => {
       if (contentEl.isConnected) {
         contentEl.innerHTML = originalHTML;
+      } else {
+        messageOriginalHTML.delete(contentEl);
       }
     });
   }
 
-  closeSearchBtn.addEventListener("click", () => {
-    searchContainer.classList.remove("visible");
-    searchInput.value = "";
-    searchResults.textContent = "";
+  function closeSearchRoleDropdown({ restoreFocus = false } = {}) {
+    searchRoleFilterMenu.hidden = true;
+    searchRoleFilterToggle.setAttribute("aria-expanded", "false");
+    if (restoreFocus) {
+      searchRoleFilterToggle.focus();
+    }
+  }
+
+  function openSearchRoleDropdown() {
+    searchRoleFilterMenu.hidden = false;
+    searchRoleFilterToggle.setAttribute("aria-expanded", "true");
+  }
+
+  function focusSearchRoleOption(offset = 0) {
+    const selectedIndex = Math.max(
+      0,
+      searchRoleFilterOptions.findIndex(option => option.dataset.value === searchRoleFilter.value)
+    );
+    const nextIndex = (selectedIndex + offset + searchRoleFilterOptions.length) % searchRoleFilterOptions.length;
+    searchRoleFilterOptions[nextIndex].focus();
+  }
+
+  function setSearchRoleFilter(value, { notify = true } = {}) {
+    const selectedOption = searchRoleFilterOptions.find(option => option.dataset.value === value)
+      || searchRoleFilterOptions[0];
+    const selectedValue = selectedOption.dataset.value;
+    const selectedLabel = selectedOption.textContent.trim();
+
+    searchRoleFilter.value = selectedValue;
+    searchRoleFilterLabel.textContent = selectedLabel;
+    searchRoleFilterToggle.title = `Фильтр сообщений: ${selectedLabel}`;
+    searchRoleFilterOptions.forEach(option => {
+      option.setAttribute("aria-selected", String(option === selectedOption));
+    });
+
+    if (notify) {
+      searchRoleFilter.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  function applySearchRoleFilter() {
+    const role = searchRoleFilter.value;
+    chatEl.classList.toggle("search-role-user", role === "user");
+    chatEl.classList.toggle("search-role-assistant", role === "assistant");
+  }
+
+  function getSearchableMessages() {
+    const role = searchRoleFilter.value;
+    if (role === "user" || role === "assistant") {
+      return Array.from(chatEl.querySelectorAll(`.msg.${role}`));
+    }
+    return Array.from(chatEl.querySelectorAll(".msg"));
+  }
+
+  function updateChatSearchUI(messageCount = getSearchableMessages().length) {
+    const query = searchInput.value.trim();
+    const matchCount = chatSearchMatches.length;
+
+    if (!query) {
+      searchResults.textContent = searchRoleFilter.value === "all"
+        ? ""
+        : `Сообщений: ${messageCount}`;
+    } else if (matchCount === 0) {
+      searchResults.textContent = "Не найдено";
+    } else {
+      searchResults.textContent = `${currentChatSearchIndex + 1} из ${matchCount}`;
+    }
+
+    const navigationDisabled = !query || matchCount === 0;
+    searchPrevBtn.disabled = navigationDisabled;
+    searchNextBtn.disabled = navigationDisabled;
+  }
+
+  function updateCurrentChatSearchMatch({ scroll = true } = {}) {
+    chatSearchMatches.forEach(match => match.classList.remove("current"));
+    if (currentChatSearchIndex < 0 || currentChatSearchIndex >= chatSearchMatches.length) {
+      return;
+    }
+
+    const currentMatch = chatSearchMatches[currentChatSearchIndex];
+    currentMatch.classList.add("current");
+
+    if (scroll) {
+      const matchRect = currentMatch.getBoundingClientRect();
+      const chatRect = chatEl.getBoundingClientRect();
+      if (matchRect.top < chatRect.top || matchRect.bottom > chatRect.bottom) {
+        currentMatch.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+  }
+
+  function navigateChatSearch(direction) {
+    const matchCount = chatSearchMatches.length;
+    if (matchCount === 0) return;
+
+    currentChatSearchIndex = (currentChatSearchIndex + direction + matchCount) % matchCount;
+    updateCurrentChatSearchMatch();
+    updateChatSearchUI();
+  }
+
+  function openChatSearch() {
+    searchContainer.classList.add("visible");
+    applySearchRoleFilter();
+    performChatSearch({ scrollToCurrent: false });
+    searchInput.focus();
+  }
+
+  function closeChatSearch() {
+    if (chatSearchRefreshTimer) {
+      clearTimeout(chatSearchRefreshTimer);
+      chatSearchRefreshTimer = null;
+    }
+
     removeAllHighlights();
-  });
+    messageOriginalHTML.clear();
+    chatSearchMatches = [];
+    currentChatSearchIndex = -1;
+    searchInput.value = "";
+    setSearchRoleFilter("all", { notify: false });
+    closeSearchRoleDropdown();
+    searchResults.textContent = "";
+    searchPrevBtn.disabled = true;
+    searchNextBtn.disabled = true;
+    chatEl.classList.remove("search-role-user", "search-role-assistant");
+    searchContainer.classList.remove("visible");
+  }
+
+  function scheduleChatSearchRefresh() {
+    if (!searchContainer.classList.contains("visible")) return;
+    if (chatSearchRefreshTimer) {
+      clearTimeout(chatSearchRefreshTimer);
+    }
+    chatSearchRefreshTimer = setTimeout(() => {
+      chatSearchRefreshTimer = null;
+      performChatSearch({ preserveCurrent: true, scrollToCurrent: false });
+    }, 200);
+  }
 
   // Helper function to highlight text in HTML while preserving structure
   function highlightInHTML(html, query) {
@@ -2031,41 +2192,138 @@
     return tempDiv.innerHTML;
   }
 
-  // Search input handler
-  searchInput.addEventListener("input", () => {
+  function performChatSearch({ preserveCurrent = false, scrollToCurrent = true } = {}) {
+    if (chatSearchRefreshTimer) {
+      clearTimeout(chatSearchRefreshTimer);
+      chatSearchRefreshTimer = null;
+    }
+
     const query = searchInput.value.trim();
+    const previousIndex = currentChatSearchIndex;
+
+    applySearchRoleFilter();
+    saveOriginalHTML();
+    removeAllHighlights();
+    chatSearchMatches = [];
+    currentChatSearchIndex = -1;
+
+    const messages = getSearchableMessages();
     if (!query) {
-      searchResults.textContent = "";
-      removeAllHighlights();
+      updateChatSearchUI(messages.length);
       return;
     }
 
-    // Save original HTML if not saved yet
-    saveOriginalHTML();
-
-    // Restore original HTML first
-    removeAllHighlights();
-
-    let matchCount = 0;
-    const messages = chatEl.querySelectorAll(".msg");
     messages.forEach(msg => {
-      const bubble = msg.querySelector(".bubble");
-      const content = bubble.querySelector(".content");
+      const content = msg.querySelector(".bubble .content");
       if (!content) return;
 
       // Check if content contains query (case-insensitive)
       if (content.textContent.toLowerCase().includes(query.toLowerCase())) {
         const originalHTML = messageOriginalHTML.get(content);
-        if (originalHTML) {
+        if (originalHTML !== undefined) {
           const highlightedHTML = highlightInHTML(originalHTML, query);
           content.innerHTML = highlightedHTML;
-          matchCount++;
+          chatSearchMatches.push(...content.querySelectorAll(".highlight"));
         }
       }
     });
 
-    searchResults.textContent = matchCount > 0 ? `Найдено: ${matchCount}` : "Ничего не найдено";
+    if (chatSearchMatches.length > 0) {
+      currentChatSearchIndex = preserveCurrent
+        ? Math.min(Math.max(previousIndex, 0), chatSearchMatches.length - 1)
+        : 0;
+      updateCurrentChatSearchMatch({ scroll: scrollToCurrent });
+    }
+
+    updateChatSearchUI(messages.length);
+  }
+
+  closeSearchBtn.addEventListener("click", closeChatSearch);
+
+  searchInput.addEventListener("input", () => {
+    performChatSearch();
   });
+
+  searchRoleFilter.addEventListener("change", () => {
+    performChatSearch();
+  });
+
+  searchRoleFilterToggle.addEventListener("click", () => {
+    if (searchRoleFilterMenu.hidden) {
+      openSearchRoleDropdown();
+    } else {
+      closeSearchRoleDropdown();
+    }
+  });
+
+  searchRoleFilterToggle.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      openSearchRoleDropdown();
+      focusSearchRoleOption();
+    } else if (event.key === "Escape" && !searchRoleFilterMenu.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSearchRoleDropdown();
+    }
+  });
+
+  searchRoleFilterOptions.forEach(option => {
+    option.addEventListener("click", () => {
+      setSearchRoleFilter(option.dataset.value);
+      closeSearchRoleDropdown({ restoreFocus: true });
+    });
+  });
+
+  searchRoleFilterMenu.addEventListener("keydown", (event) => {
+    const activeIndex = searchRoleFilterOptions.indexOf(document.activeElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const nextIndex = (Math.max(activeIndex, 0) + direction + searchRoleFilterOptions.length)
+        % searchRoleFilterOptions.length;
+      searchRoleFilterOptions[nextIndex].focus();
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      const edgeIndex = event.key === "Home" ? 0 : searchRoleFilterOptions.length - 1;
+      searchRoleFilterOptions[edgeIndex].focus();
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (activeIndex >= 0) {
+        searchRoleFilterOptions[activeIndex].click();
+      }
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSearchRoleDropdown({ restoreFocus: true });
+    } else if (event.key === "Tab") {
+      closeSearchRoleDropdown();
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!searchRoleDropdown.contains(event.target)) {
+      closeSearchRoleDropdown();
+    }
+  });
+
+  searchInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      navigateChatSearch(event.shiftKey ? -1 : 1);
+    }
+  });
+
+  searchContainer.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeChatSearch();
+      searchBtn.focus();
+    }
+  });
+
+  searchPrevBtn.addEventListener("click", () => navigateChatSearch(-1));
+  searchNextBtn.addEventListener("click", () => navigateChatSearch(1));
 
 
   form.addEventListener("submit", async (e) => {

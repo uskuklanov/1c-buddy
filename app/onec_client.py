@@ -9,6 +9,7 @@ from typing import Optional, AsyncGenerator, Dict, Any
 import httpx
 
 from .config import get_settings, Settings
+from .http_client import create_async_http_client
 from .onec_models import (
     ConversationRequest,
     ConversationResponse,
@@ -41,7 +42,8 @@ class OneCApiClient:
 
         # Create async HTTP client
         # Use infinite read timeout for SSE, while keeping bounded connect/write/pool timeouts
-        self.client = httpx.AsyncClient(
+        self.client = create_async_http_client(
+            settings=self.settings,
             timeout=httpx.Timeout(
                 connect=self.settings.ONEC_AI_TIMEOUT,
                 read=None,

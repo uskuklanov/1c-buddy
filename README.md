@@ -24,6 +24,9 @@
 ![Интерфейс чата](chat_ui.png)
 
 ### 🔧 MCP сервер
+- Два транспорта поверх одного набора инструментов:
+  - **HTTP** — `POST /mcp` внутри основного сервиса (нужен запущенный контейнер или `1c-buddy http`)
+  - **stdio** — `1c-buddy-mcp` для Codex / IDE: не открывает порт, не поднимает чат, не требует FastAPI
 - Доступные инструменты:
   - `ask_1c_ai` - общие вопросы по платформе 1С и практическим сценариям
   - `explain_1c_syntax` - объяснение конкретного объекта, метода или конструкции 1С
@@ -75,7 +78,20 @@
 
    После этого в чате появится кнопка настроек. В ней можно задать инструкции рабочего пространства и подключить внешние Streamable HTTP MCP серверы, например `http://192.168.0.1:6003/mcp`.
 
-4. **Настройте MCP для IDE:**
+   **Запуск за корпоративным прокси.** Сертификат передаётся снаружи через volume, образ не меняется:
+   ```bash
+   docker run -d --name 1c-buddy --restart unless-stopped -p 6002:6002 \
+     -v "$PWD/certs/company-ca-bundle.pem:/certs/company-ca-bundle.pem:ro" \
+     -e "SSL_CERT_FILE=/certs/company-ca-bundle.pem" \
+     -e "HTTPS_PROXY=http://proxy.company.local:3128" \
+     -e "NO_PROXY=localhost,127.0.0.1" \
+     -e "ONEC_AI_TOKEN=<your_1c_ai_token>" \
+     roctup/1c-buddy
+   ```
+
+   `SSL_CERT_FILE` должен указывать на **полный** PEM-бандл: если он задан, публичные корневые сертификаты берутся только из него, поэтому в файле должны быть и публичные CA, и корпоративный. Подробности и аварийный режим `SSL_VERIFY=false` — в [README_FULL.md](README_FULL.md#прокси-и-tls).
+
+4. **Настройте MCP для IDE (HTTP-транспорт, нужен запущенный сервис):**
     ```bash
     {
       "mcpServers": {   
@@ -118,6 +134,85 @@
   		print(chunk.choices[0].delta.content, end="")
   	```
 
+
+## Запуск без Docker
+
+Проект устанавливается как обычный Python-пакет (требуется Python 3.10+). Зависимости разделены: HTTP-сервису не нужен MCP SDK, а stdio-режиму не нужен FastAPI.
+
+### Нативный HTTP-сервис (чат + HTTP MCP + опциональный OpenAI API)
+
+Windows:
+```powershell
+py -m venv .venv
+& .\.venv\Scripts\python.exe -m pip install ".[http]"
+& .\.venv\Scripts\1c-buddy.exe --env-file .env http
+```
+
+Linux / macOS:
+```bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install ".[http]"
+./.venv/bin/1c-buddy --env-file .env http
+```
+
+Опции: `--host` (по умолчанию `0.0.0.0`), `--port` (`6002`), `--log-level`, `--reload`.
+
+> ⚠️ По умолчанию сервис слушает `0.0.0.0`, а чат и `/mcp` **не имеют встроенной аутентификации**. Не выставляйте порт в недоверенную сеть; для локальной работы используйте `--host 127.0.0.1`. Маршруты `/v1/*` монтируются только при заданном `OPENAI_COMPAT_API_KEY`.
+
+### MCP через stdio для Codex / IDE
+
+Этот режим даёт **только** MCP-инструменты через stdin/stdout: порт не открывается, чат и OpenAI API не поднимаются.
+
+Windows:
+```powershell
+py -m venv .venv
+& .\.venv\Scripts\python.exe -m pip install ".[stdio]"
+[Environment]::SetEnvironmentVariable("ONEC_AI_TOKEN", "<your_1c_ai_token>", "User")
+```
+
+Linux / macOS:
+```bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install ".[stdio]"
+export ONEC_AI_TOKEN=<your_1c_ai_token>   # лучше прописать в ~/.profile
+```
+
+> **Есть и минимальный вариант.** Отдельный дистрибутив [`1c-buddy-mcp`](mcp-package/README.md) содержит только MCP — без чата, OpenAI API, статики и `tiktoken`:
+>
+> ```powershell
+> & .\.venv\Scripts\python.exe -m pip install .\mcp-package          # stdio
+> & .\.venv\Scripts\python.exe -m pip install ".\mcp-package[http]"  # + HTTP MCP
+> ```
+>
+> Оба дистрибутива ставят console script с именем `1c-buddy-mcp`, поэтому конфиг Codex ниже подходит и полному пакету, и минимальному. Но ставить их **рядом**, в один venv, нельзя: они делят модули `app/` и саму команду. Подробности и порядок восстановления — в [README_FULL.md](README_FULL.md#минимальный-mcp-only-wheel).
+
+Конфигурация Codex (`~/.codex/config.toml`) — Windows:
+```toml
+[mcp_servers.onec-buddy]
+command = 'C:\Users\<user>\.codex\mcp\1c-buddy\.venv\Scripts\1c-buddy-mcp.exe'
+startup_timeout_sec = 30
+
+[mcp_servers.onec-buddy.env]
+ONEC_AI_UI_LANGUAGE = "russian"
+ONEC_AI_TIMEOUT = "30"
+MCP_TOOL_CALL_MODE = "direct"
+```
+
+Linux / macOS:
+```toml
+[mcp_servers.onec-buddy]
+command = "/home/<user>/.codex/mcp/1c-buddy/.venv/bin/1c-buddy-mcp"
+startup_timeout_sec = 30
+
+[mcp_servers.onec-buddy.env]
+ONEC_AI_UI_LANGUAGE = "russian"
+ONEC_AI_TIMEOUT = "30"
+MCP_TOOL_CALL_MODE = "direct"
+```
+
+Токен лучше держать в пользовательском окружении, а не в конфиге. Явная альтернатива — передать файл: `1c-buddy-mcp --env-file C:\path\to\.env`. После изменения пользовательского окружения Codex нужно перезапустить.
+
+`.env` **никогда** не подхватывается автоматически из текущего каталога — только через `--env-file`. Значения уже существующего окружения имеют приоритет над значениями из файла.
 
 ## Документация
 

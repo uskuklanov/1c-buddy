@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from ..config import Settings, get_settings
+from ..http_client import create_async_http_client
 from ..onec_models import (
     ApiError,
     ConversationRequest,
@@ -29,7 +30,8 @@ class McpUpstreamToolsClient:
         self.settings: Settings = settings or get_settings()
         self.base_url = self.settings.ONEC_AI_BASE_URL.rstrip("/")
         self._last_assistant_uuid: Dict[str, Optional[str]] = {}
-        self.client = httpx.AsyncClient(
+        self.client = create_async_http_client(
+            settings=self.settings,
             timeout=httpx.Timeout(
                 connect=self.settings.ONEC_AI_TIMEOUT,
                 read=None,

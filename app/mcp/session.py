@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 from fastapi import Request
 
@@ -23,7 +23,6 @@ class McpSession:
     protocol_version: str
     created: int = field(default_factory=_now)
     last_seen: int = field(default_factory=_now)
-    conversation_id: Optional[str] = None
 
     def touch(self) -> None:
         self.last_seen = _now()
@@ -50,17 +49,6 @@ class McpSessionStore:
             return None
         sess.touch()
         return sess
-
-    def get_conversation(self, session_id: str) -> Optional[str]:
-        sess = self.get(session_id)
-        return sess.conversation_id if sess else None
-
-    def set_conversation(self, session_id: str, conversation_id: str) -> bool:
-        sess = self.get(session_id)
-        if not sess:
-            return False
-        sess.conversation_id = conversation_id
-        return True
 
     def _expired(self, sess: McpSession) -> bool:
         return (_now() - sess.last_seen) > self._ttl
